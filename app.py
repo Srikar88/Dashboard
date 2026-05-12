@@ -7,19 +7,43 @@ import plotly.graph_objects as go
 from io import BytesIO
 from datetime import datetime
 
+# ---------------------------------------------------
+# PAGE CONFIG
+# ---------------------------------------------------
+
 st.set_page_config(
-    page_title="Indian Stock Dashboard",
+    page_title="Indian Stock Futures Dashboard",
     page_icon="📈",
     layout="wide"
 )
 
+# ---------------------------------------------------
+# NSE F&O STOCK LIST
+# ---------------------------------------------------
+
+FNO_STOCKS = [
+    "RELIANCE","TCS","INFY","HDFCBANK","ICICIBANK",
+    "SBIN","LT","AXISBANK","KOTAKBANK","ITC",
+    "BHARTIARTL","ASIANPAINT","MARUTI","SUNPHARMA",
+    "TITAN","ULTRACEMCO","BAJFINANCE","HCLTECH",
+    "WIPRO","ONGC","POWERGRID","NTPC","TATAMOTORS",
+    "M&M","INDUSINDBK","ADANIENT","ADANIPORTS",
+    "JSWSTEEL","HINDALCO","COALINDIA","BPCL",
+    "DIVISLAB","TECHM","GRASIM","EICHERMOT",
+    "BAJAJFINSV","BAJAJ-AUTO","DRREDDY","CIPLA",
+    "HEROMOTOCO","UPL","TATASTEEL","SBILIFE",
+    "BRITANNIA","NESTLEIND","HDFCLIFE","APOLLOHOSP",
+    "PIDILITIND","DABUR","AMBUJACEM"
+]
+
 MONTHS = [
-    'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun',
-    'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'
+    'Jan', 'Feb', 'Mar', 'Apr',
+    'May', 'Jun', 'Jul', 'Aug',
+    'Sep', 'Oct', 'Nov', 'Dec'
 ]
 
 # ---------------------------------------------------
-# Symbol Formatter
+# SYMBOL NORMALIZATION
 # ---------------------------------------------------
 
 def normalize_symbol(symbol):
@@ -43,39 +67,50 @@ def normalize_symbol(symbol):
     return symbol
 
 # ---------------------------------------------------
-# Fetch Data
+# FETCH DATA
 # ---------------------------------------------------
 
 @st.cache_data
 def fetch_data(symbol):
 
     try:
+
         ticker = yf.Ticker(symbol)
 
-        df = ticker.history(period="max", auto_adjust=True)
+        df = ticker.history(
+            period="max",
+            auto_adjust=True
+        )
 
         if df.empty:
             return None
 
-        return df[['Close']]
+        return df
 
     except:
         return None
 
 # ---------------------------------------------------
-# Monthly Return Matrix
+# MONTHLY RETURNS MATRIX
 # ---------------------------------------------------
 
 def create_monthly_matrix(df):
 
-    monthly_prices = df['Close'].resample('M').last()
+    monthly_close = df['Close'].resample('M').last()
 
-    monthly_returns = monthly_prices.pct_change() * 100
+    monthly_returns = monthly_close.pct_change() * 100
 
-    monthly_df = monthly_returns.to_frame(name='Return')
+    monthly_df = pd.DataFrame(monthly_returns)
+
+    monthly_df.columns = ['Return']
 
     monthly_df['Year'] = monthly_df.index.year
     monthly_df['Month'] = monthly_df.index.month
+
+    min_year = monthly_df['Year'].min()
+    max_year = monthly_df['Year'].max()
+
+    full_years = list(range(min_year, max_year + 1))
 
     matrix = monthly_df.pivot_table(
         index='Year',
@@ -83,23 +118,27 @@ def create_monthly_matrix(df):
         values='Return'
     )
 
+    matrix = matrix.reindex(full_years)
+
     matrix = matrix.reindex(columns=range(1, 13))
 
     matrix.columns = MONTHS
 
-    # Correct yearly compounded returns
     yearly_returns = (
-        monthly_prices.resample('Y').last().pct_change() * 100
+        monthly_close.groupby(monthly_close.index.year)
+        .apply(
+            lambda x: (
+                (x.iloc[-1] / x.iloc[0]) - 1
+            ) * 100
+        )
     )
-
-    yearly_returns.index = yearly_returns.index.year
 
     matrix['Yearly'] = yearly_returns
 
     return matrix.round(2)
 
 # ---------------------------------------------------
-# Statistics
+# PERFORMANCE STATS
 # ---------------------------------------------------
 
 def calculate_stats(df):
@@ -115,7 +154,9 @@ def calculate_stats(df):
         ) ** (1 / total_years) - 1
     ) * 100
 
-    volatility = daily_returns.std() * np.sqrt(252) * 100
+    volatility = (
+        daily_returns.std() * np.sqrt(252)
+    ) * 100
 
     rolling_max = df['Close'].cummax()
 
@@ -132,50 +173,89 @@ def calculate_stats(df):
     }
 
 # ---------------------------------------------------
-# Excel Export
+# EXCEL EXPORT
 # ---------------------------------------------------
 
 def generate_excel(data_dict):
 
     output = BytesIO()
 
-    with pd.ExcelWriter(output, engine='xlsxwriter') as writer:
+    with pd.ExcelWriter(
+        output,
+        engine='xlsxwriter'
+    ) as writer:
 
         for stock, matrix in data_dict.items():
 
-            matrix.to_excel(writer, sheet_name=stock[:30])
+            matrix.to_excel(
+                writer,
+                sheet_name=stock[:30]
+            )
 
     output.seek(0)
 
     return output
 
 # ---------------------------------------------------
-# Sidebar
+# SIDEBAR
 # ---------------------------------------------------
 
 st.sidebar.title("📊 Dashboard Controls")
 
-symbols_input = st.sidebar.text_area(
-    "Enter Stocks / Indices",
-    value="RELIANCE, TCS, INFY, NIFTY50"
+selected_stock = st.sidebar.selectbox(
+    "Select NSE F&O Stock",
+    FNO_STOCKS
 )
 
-show_heatmap = st.sidebar.checkbox("Show Heatmap", True)
-show_line_chart = st.sidebar.checkbox("Show Price Chart", True)
-show_drawdown = st.sidebar.checkbox("Show Drawdown", True)
+custom_stock = st.sidebar.text_input(
+    "Or Enter Custom Symbol"
+)
 
-symbols = [
-    normalize_symbol(x)
-    for x in symbols_input.split(",")
-]
+if custom_stock:
+    symbols = [normalize_symbol(custom_stock)]
+else:
+    symbols = [normalize_symbol(selected_stock)]
+
+show_heatmap = st.sidebar.checkbox(
+    "Show Heatmap",
+    True
+)
+
+show_candlestick = st.sidebar.checkbox(
+    "Show Candlestick Chart",
+    True
+)
+
+show_drawdown = st.sidebar.checkbox(
+    "Show Drawdown Chart",
+    True
+)
+
+show_rolling = st.sidebar.checkbox(
+    "Show Rolling Returns",
+    True
+)
+
+# ---------------------------------------------------
+# MAIN TITLE
+# ---------------------------------------------------
+
+st.title("📈 Indian Stock Futures Dashboard")
+
+st.markdown("""
+Comprehensive dashboard for:
+- Monthly seasonality analysis
+- Technical trend analysis
+- Rolling returns
+- Drawdowns
+- Long-term price action
+""")
 
 all_data = {}
 
 # ---------------------------------------------------
-# Main Dashboard
+# MAIN LOOP
 # ---------------------------------------------------
-
-st.title("📈 Indian Stock Monthly Returns Dashboard")
 
 for symbol in symbols:
 
@@ -195,49 +275,62 @@ for symbol in symbols:
 
     all_data[symbol] = matrix
 
-    # --------------------------------------------
-    # Statistics
-    # --------------------------------------------
+    # ---------------------------------------------------
+    # METRICS
+    # ---------------------------------------------------
 
     stats = calculate_stats(df)
 
     c1, c2, c3 = st.columns(3)
 
-    c1.metric("CAGR", f"{stats['CAGR']}%")
-    c2.metric("Volatility", f"{stats['Volatility']}%")
-    c3.metric("Max Drawdown", f"{stats['Max Drawdown']}%")
+    c1.metric(
+        "CAGR",
+        f"{stats['CAGR']}%"
+    )
 
-    # --------------------------------------------
-    # Heatmap
-    # --------------------------------------------
+    c2.metric(
+        "Volatility",
+        f"{stats['Volatility']}%"
+    )
+
+    c3.metric(
+        "Max Drawdown",
+        f"{stats['Max Drawdown']}%"
+    )
+
+    # ---------------------------------------------------
+    # HEATMAP
+    # ---------------------------------------------------
 
     if show_heatmap:
 
-        st.subheader("Monthly Return Heatmap")
+        st.subheader("📅 Monthly Returns Heatmap")
 
-        heatmap_data = matrix.drop(columns=['Yearly'])
-
-        fig = px.imshow(
-            heatmap_data,
-            text_auto=True,
-            color_continuous_scale='RdYlGn',
-            aspect='auto'
+        heatmap_data = matrix.drop(
+            columns=['Yearly']
         )
 
-        fig.update_layout(
-            height=600
+        fig_heatmap = px.imshow(
+            heatmap_data,
+            text_auto=True,
+            aspect='auto',
+            color_continuous_scale='RdYlGn'
+        )
+
+        fig_heatmap.update_layout(
+            height=700
         )
 
         st.plotly_chart(
-            fig,
+            fig_heatmap,
             use_container_width=True
         )
 
-    # --------------------------------------------
-    # Matrix Table
-    # --------------------------------------------
+    # ---------------------------------------------------
+    # RETURNS MATRIX
+    # ---------------------------------------------------
 
-    st.subheader("Monthly Returns Matrix")
+    st.subheader("📊 Monthly Returns Matrix")
 
     st.dataframe(
         matrix.style.background_gradient(
@@ -245,46 +338,46 @@ for symbol in symbols:
             axis=None
         ),
         use_container_width=True,
-        height=600
+        height=700
     )
 
-    # --------------------------------------------
-    # Price Chart
-    # --------------------------------------------
+    # ---------------------------------------------------
+    # CANDLESTICK CHART
+    # ---------------------------------------------------
 
-    if show_line_chart:
+    if show_candlestick:
 
-        st.subheader("Price Trend")
+        st.subheader("🕯️ Candlestick Chart")
 
-        fig2 = go.Figure()
-
-        fig2.add_trace(
-            go.Scatter(
-                x=df.index,
-                y=df['Close'],
-                mode='lines',
-                name=symbol
-            )
+        fig_candle = go.Figure(
+            data=[
+                go.Candlestick(
+                    x=df.index,
+                    open=df['Open'],
+                    high=df['High'],
+                    low=df['Low'],
+                    close=df['Close']
+                )
+            ]
         )
 
-        fig2.update_layout(
-            height=500,
-            xaxis_title="Date",
-            yaxis_title="Price"
+        fig_candle.update_layout(
+            height=700,
+            xaxis_rangeslider_visible=False
         )
 
         st.plotly_chart(
-            fig2,
+            fig_candle,
             use_container_width=True
         )
 
-    # --------------------------------------------
-    # Drawdown Chart
-    # --------------------------------------------
+    # ---------------------------------------------------
+    # DRAWDOWN CHART
+    # ---------------------------------------------------
 
     if show_drawdown:
 
-        st.subheader("Drawdown Chart")
+        st.subheader("📉 Drawdown Analysis")
 
         rolling_max = df['Close'].cummax()
 
@@ -292,9 +385,9 @@ for symbol in symbols:
             df['Close'] / rolling_max - 1
         ) * 100
 
-        fig3 = go.Figure()
+        fig_drawdown = go.Figure()
 
-        fig3.add_trace(
+        fig_drawdown.add_trace(
             go.Scatter(
                 x=df.index,
                 y=drawdown,
@@ -303,26 +396,60 @@ for symbol in symbols:
             )
         )
 
-        fig3.update_layout(
+        fig_drawdown.update_layout(
             height=400,
             yaxis_title="Drawdown %",
             xaxis_title="Date"
         )
 
         st.plotly_chart(
-            fig3,
+            fig_drawdown,
+            use_container_width=True
+        )
+
+    # ---------------------------------------------------
+    # ROLLING RETURNS
+    # ---------------------------------------------------
+
+    if show_rolling:
+
+        st.subheader("📈 Rolling 1-Year Returns")
+
+        rolling_returns = (
+            df['Close'].pct_change(252)
+        ) * 100
+
+        fig_roll = go.Figure()
+
+        fig_roll.add_trace(
+            go.Scatter(
+                x=rolling_returns.index,
+                y=rolling_returns,
+                mode='lines',
+                name='1Y Rolling Return'
+            )
+        )
+
+        fig_roll.update_layout(
+            height=400,
+            yaxis_title="Return %",
+            xaxis_title="Date"
+        )
+
+        st.plotly_chart(
+            fig_roll,
             use_container_width=True
         )
 
 # ---------------------------------------------------
-# Comparison Table
+# COMPARISON TABLE
 # ---------------------------------------------------
 
-if len(all_data) > 1:
+if len(all_data) > 0:
 
     st.divider()
 
-    st.header("📌 Stock Comparison")
+    st.header("📌 Stock Performance Comparison")
 
     comparison = []
 
@@ -347,7 +474,7 @@ if len(all_data) > 1:
     )
 
 # ---------------------------------------------------
-# Excel Download
+# DOWNLOAD EXCEL
 # ---------------------------------------------------
 
 if all_data:
@@ -360,3 +487,13 @@ if all_data:
         file_name=f"stock_dashboard_{datetime.now().date()}.xlsx",
         mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
     )
+
+# ---------------------------------------------------
+# FOOTER
+# ---------------------------------------------------
+
+st.markdown("---")
+
+st.caption(
+    "Built with Streamlit • Indian Futures Market Dashboard"
+)
